@@ -7,24 +7,47 @@ import dumper
 import utils
 import argparse
 import logging
+from rich_argparse import ArgumentDefaultsRichHelpFormatter
+from rich.progress import track
+from rich.logging import RichHandler
+from rich.console import Console
+from rich.text import Text
+import numpy as np
+import matplotlib, re
 
-logo = """
-        ______    _     _
-        |  ___|  (_)   | |
-        | |_ _ __ _  __| |_   _ _ __ ___  _ __
-        |  _| '__| |/ _` | | | | '_ ` _ \| '_ \\
-        | | | |  | | (_| | |_| | | | | | | |_) |
-        \_| |_|  |_|\__,_|\__,_|_| |_| |_| .__/
-                                         | |
-                                         |_|
+console = Console()
+cmap = matplotlib.colormaps["rainbow_r"]
+logo = r"""
+  ______    _     _                      __   _____ 
+ |  ____|  (_)   | |                    /_ | | ____|
+ | |__ _ __ _  __| |_   _ _ __ ___  _ __ | | | |__  
+ |  __| '__| |/ _` | | | | '_ ` _ \| '_ \| | |___ \ 
+ | |  | |  | | (_| | |_| | | | | | | |_) | |_ ___) |
+ |_|  |_|  |_|\__,_|\__,_|_| |_| |_| .__/|_(_)____/ 
+                                   | |              
+                                   |_|              
         """
 
+length = max([len(a) for a in logo.split("\n")])
+# print(length)
+gradient = np.linspace(0, 1, length)
+
+newbanner = Text("")
+for line in [a for a in logo.split("\n") if a!=""]:
+     newline = Text("")
+     for (i,chr) in enumerate([a for a in re.split(r"(.)", line) if a!='']):
+          colorhex = matplotlib.colors.rgb2hex(cmap(gradient[i])) 
+          newline.append(f"{chr}", style=f"{colorhex}")
+     newbanner.append(newline)
+     newbanner.append(Text("\n"))
+
+console = Console(color_system="truecolor")
 
 # Main Menu
 def MENU():
     parser = argparse.ArgumentParser(
         prog='fridump',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=ArgumentDefaultsRichHelpFormatter,
         description=textwrap.dedent(""))
 
     parser.add_argument('process',
@@ -45,7 +68,7 @@ def MENU():
     return args
 
 
-print(logo)
+console.print(newbanner)
 
 arguments = MENU()
 
@@ -63,7 +86,7 @@ if arguments.read_only:
 
 if arguments.verbose:
     DEBUG_LEVEL = logging.DEBUG
-logging.basicConfig(format='%(levelname)s:%(message)s', level=DEBUG_LEVEL)
+logging.basicConfig(format='%(message)s', level=DEBUG_LEVEL, handlers=[RichHandler(rich_tracebacks=True)])
 
 
 # Start a new Session
@@ -74,7 +97,7 @@ try:
     else:
         session = frida.attach(APP_NAME)
 except Exception as e:
-    print("Can't connect to App. Have you connected the device?")
+    logging.error("Can't connect to App. Have you connected the device?")
     logging.debug(str(e))
     sys.exit()
 
@@ -83,22 +106,22 @@ except Exception as e:
 if arguments.out is not None:
     DIRECTORY = arguments.out
     if os.path.isdir(DIRECTORY):
-        print("Output directory is set to: " + DIRECTORY)
+        logging.info("Output directory is set to: " + DIRECTORY)
     else:
-        print("The selected output directory does not exist!")
+        logging.error("The selected output directory does not exist!")
         sys.exit(1)
 
 else:
-    print("Current Directory: " + str(os.getcwd()))
+    logging.info("Current Directory: " + str(os.getcwd()))
     DIRECTORY = os.path.join(os.getcwd(), "dump")
-    print("Output directory is set to: " + DIRECTORY)
+    logging.info("Output directory is set to: " + DIRECTORY)
     if not os.path.exists(DIRECTORY):
-        print("Creating directory...")
+        logging.info("Creating directory...")
         os.makedirs(DIRECTORY)
 
-mem_access_viol = ""
+mem_access_viol = "cum"
 
-print("Starting Memory dump...")
+logging.info("Starting Memory dump...")
 
 script = session.create_script(
     """'use strict';
@@ -113,20 +136,25 @@ script = session.create_script(
     };
 
     """)
-script.on("message", utils.on_message)
+
+def on_message(message, data):
+    logging.info(message)
+
+script.on('message', on_message)
 script.load()
 
-agent = script.exports
+agent = script.exports_sync
 ranges = agent.enumerate_ranges(PERMS)
 
 if arguments.max_size is not None:
     MAX_SIZE = arguments.max_size
 
-i = 0
-l = len(ranges)
+# i = 0
+# l = len(ranges)
 
 # Performing the memory dump
-for range in ranges:
+
+for range in track(ranges, description="[green]"+"Dumping memory...".ljust(32)):
     base = range["base"]
     size = range["size"]
 
@@ -142,19 +170,16 @@ for range in ranges:
         continue
     mem_access_viol = dumper.dump_to_file(
         agent, base, size, mem_access_viol, DIRECTORY)
-    i += 1
-    utils.printProgress(i, l, prefix='Progress:', suffix='Complete', bar=50)
-print("")
 
+    
 # Run Strings if selected
 
 if STRINGS:
     files = os.listdir(DIRECTORY)
     i = 0
     l = len(files)
-    print("Running strings on all files:")
-    for f1 in files:
+    # print("Running strings on all files:")
+    for f1 in track(files, description="[green]"+"Running strings on all files...".ljust(32)):
         utils.strings(f1, DIRECTORY)
-        i += 1
-        utils.printProgress(i, l, prefix='Progress:', suffix='Complete', bar=50)
-print("Finished!")
+
+console.print("[green]:heavy_check_mark: Finished!")
